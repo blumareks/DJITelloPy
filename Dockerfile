@@ -1,4 +1,4 @@
-# Requires: docker login registry.redhat.io  (free Red Hat account)
+# Requires: podman login registry.redhat.io  (free Red Hat account)
 # Multi-arch image, so the arm64 variant is pulled automatically on Raspberry Pi 5.
 FROM registry.redhat.io/ubi9/python-312-minimal:latest
 

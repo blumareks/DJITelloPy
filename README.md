@@ -30,6 +30,48 @@ cd DJITelloPy
 pip install -e .
 ```
 
+## Run locally
+Before running anything, power on the Tello and connect the computer (or Raspberry Pi) to the drone's Wi-Fi network (`TELLO-XXXXXX`). The drone is reachable at `192.168.10.1`.
+
+### Option 1: Python virtual environment
+```
+git clone https://github.com/damiafuentes/DJITelloPy.git
+cd DJITelloPy
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --only-binary=:all: -r requirements.txt
+pip install --no-deps -e .
+python examples/simple.py
+```
+
+- `--only-binary=:all:` makes pip use prebuilt wheels and fail immediately instead of trying to compile packages (useful on a Raspberry Pi).
+- `--no-deps` skips `opencv-python`, which the library itself does not import. It is only needed by some examples (`take-picture.py`, `record-video.py`, `manual-control-opencv.py`). For those, additionally run `pip install --only-binary=:all: opencv-python-headless` (or `opencv-python` if you have a display).
+
+### Option 2: Podman (e.g. Raspberry Pi 5)
+The [Dockerfile](Dockerfile) uses the Red Hat UBI Python image, so log in to the Red Hat registry first (free Red Hat account required). Rootless Podman is sufficient.
+```
+podman login registry.redhat.io
+podman build -t djitellopy .
+podman run --rm -it \
+  --network host \
+  --read-only --tmpfs /tmp \
+  --cap-drop all --security-opt no-new-privileges \
+  djitellopy
+```
+
+- `--network host` is required, because the Tello sends state (UDP 8890) and video (UDP 11111) packets to the host, which does not work through container NAT.
+- By default `examples/simple.py` is run (the drone **takes off**). To run another script, mount your examples and override the command:
+  ```
+  podman run --rm -it --network host --read-only --tmpfs /tmp \
+    --cap-drop all --security-opt no-new-privileges \
+    -v ./examples:/opt/app-root/src/examples:ro \
+    djitellopy python examples/<script>.py
+  ```
+  (On SELinux hosts append `,Z` to the volume options: `:ro,Z`.)
+- Alternatively use the included [docker-compose.yml](docker-compose.yml) with `podman compose up --build` (requires `podman-compose` or the docker-compose plugin).
+- Examples using OpenCV need `opencv-python-headless` added to the `pip install` step in the Dockerfile.
+- The pygame example needs a display and does not work in the container.
+
 ## Usage
 ### API Reference
 See [djitellopy.readthedocs.io](https://djitellopy.readthedocs.io/en/latest/) for a full reference of all classes and methods available.
