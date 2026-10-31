@@ -1,0 +1,16 @@
+services:
+  tello:
+    build: .
+    # Tello pushes UDP state (8890) and video (11111) to the host unsolicited,
+    # which does not work through Docker's bridge NAT.
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./examples:/opt/app-root/src/examples:ro
+    command: ["python", "examples/simple.py"]
