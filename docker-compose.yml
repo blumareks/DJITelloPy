@@ -2,8 +2,14 @@ services:
   tello:
     build: .
     # Tello pushes UDP state (8890) and video (11111) to the host unsolicited,
-    # which does not work through Docker's bridge NAT.
+    # which does not work through the container's NAT.
     network_mode: host
+    environment:
+      # Secrets come from the shell environment, never from this file.
+      API_KEY: ${API_KEY:?set API_KEY (at least 32 random characters)}
+      # IP of the Pi's interface your clients connect to (not 0.0.0.0).
+      API_HOST: ${API_HOST:?set API_HOST to the Pi's own IP address}
+      API_PORT: ${API_PORT:-8000}
     read_only: true
     tmpfs:
       - /tmp
@@ -12,5 +18,4 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./examples:/opt/app-root/src/examples:ro
-    command: ["python", "examples/simple.py"]
+      - ./recordings:/recordings:Z,U

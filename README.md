@@ -48,29 +48,105 @@ python examples/simple.py
 - `--no-deps` skips `opencv-python`, which the library itself does not import. It is only needed by some examples (`take-picture.py`, `record-video.py`, `manual-control-opencv.py`). For those, additionally run `pip install --only-binary=:all: opencv-python-headless` (or `opencv-python` if you have a display).
 
 ### Option 2: Podman (e.g. Raspberry Pi 5)
-The [Dockerfile](Dockerfile) uses the Red Hat UBI Python image, so log in to the Red Hat registry first (free Red Hat account required). Rootless Podman is sufficient.
+The [Dockerfile](Dockerfile) uses the Red Hat UBI Python image, so log in to the Red Hat registry first (free Red Hat account required). Rootless Podman is sufficient. The container starts the [REST API](#rest-api) by default.
 ```
 podman login registry.redhat.io
 podman build -t djitellopy .
+
+export API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+echo "$API_KEY"   # keep it, clients need it
+mkdir -p recordings
 podman run --rm -it \
   --network host \
+  -e API_KEY -e API_HOST=<ip-of-the-pi-on-your-lan> \
   --read-only --tmpfs /tmp \
   --cap-drop all --security-opt no-new-privileges \
+  -v ./recordings:/recordings:Z,U \
   djitellopy
 ```
 
 - `--network host` is required, because the Tello sends state (UDP 8890) and video (UDP 11111) packets to the host, which does not work through container NAT.
-- By default `examples/simple.py` is run (the drone **takes off**). To run another script, mount your examples and override the command:
+- Alternatively use the included [docker-compose.yml](docker-compose.yml) with `API_KEY=... API_HOST=... podman compose up --build` (requires `podman-compose` or the docker-compose plugin).
+- To run an example script instead of the API, mount the examples and override the command:
   ```
   podman run --rm -it --network host --read-only --tmpfs /tmp \
     --cap-drop all --security-opt no-new-privileges \
-    -v ./examples:/opt/app-root/src/examples:ro \
+    -v ./examples:/opt/app-root/src/examples:ro,Z \
     djitellopy python examples/<script>.py
   ```
-  (On SELinux hosts append `,Z` to the volume options: `:ro,Z`.)
-- Alternatively use the included [docker-compose.yml](docker-compose.yml) with `podman compose up --build` (requires `podman-compose` or the docker-compose plugin).
 - Examples using OpenCV need `opencv-python-headless` added to the `pip install` step in the Dockerfile.
 - The pygame example needs a display and does not work in the container.
+
+## REST API
+[`tello_api/`](tello_api/) is a small [FastAPI](https://fastapi.tiangolo.com/) service that turns HTTP requests into Tello commands.
+
+### Try it in Swagger UI
+Start the service, then open **`http://<API_HOST>:<API_PORT>/docs`** in a browser (e.g. `http://127.0.0.1:8000/docs`):
+
+1. Click **Authorize**, paste your `API_KEY`, click **Authorize** again.
+2. Expand an endpoint, click **Try it out**, edit the example body, click **Execute**.
+
+A safe first check without flying: `GET /v1/status`, then `PUT /v1/recording` (works on the ground). Then `POST /v1/takeoff`, a move, `POST /v1/land`.
+
+- Swagger UI is bundled in the repo ([`tello_api/static/swagger-ui/`](tello_api/static/swagger-ui/)), so the page works with no internet access, e.g. when you are only connected to the Tello's Wi-Fi.
+- `/docs` and `/openapi.json` need no key (they only describe the API); every `/v1/...` call does.
+- The machine-readable spec is at `/openapi.json` and committed as [`tello_api/docs/openapi.json`](tello_api/docs/openapi.json). Import it into Postman, Insomnia, Bruno, or a code generator. Regenerate it after changing the API with `python -m tello_api.export_openapi` (a test fails if it is stale).
+
+**Network setup:** the Pi's Wi-Fi is connected to the Tello (`TELLO-XXXXXX`), so reach the API through the Pi's other interface (e.g. Ethernet, or a second Wi-Fi adapter). Set `API_HOST` to that interface's IP address.
+
+### Run without a container
+```
+pip install --only-binary=:all: -r requirements.txt -r tello_api/requirements.txt
+pip install --no-deps -e .
+export API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -m tello_api            # listens on 127.0.0.1:8000
+```
+
+### Configuration (environment variables)
+| Variable | Default | Description |
+|---|---|---|
+| `API_KEY` | _required_ | Random secret, at least 32 characters. Sent by clients in the `X-API-Key` header. |
+| `API_HOST` | `127.0.0.1` | Address to bind to. `0.0.0.0` is refused; use a specific IP. |
+| `API_PORT` | `8000` | Port. |
+| `RECORDINGS_DIR` | `./recordings` | Where `.mp4` recordings are saved. |
+| `TLS_CERTFILE`, `TLS_KEYFILE` | unset | Serve HTTPS. Without them the API key travels unencrypted, so only use plain HTTP on a trusted network. |
+
+### Endpoints
+All endpoints are under `/v1` and need the `X-API-Key` header. Request bodies are JSON.
+
+| Method & path | Body | Action |
+|---|---|---|
+| `POST /v1/takeoff` | – | Take off |
+| `POST /v1/land` | – | Land |
+| `POST /v1/move/{up\|down\|left\|right}` | `{"distance_cm": 20..500}` | Fly that distance |
+| `POST /v1/turn/{left\|right}` | `{"degrees": 1..360}` | Rotate |
+| `PUT /v1/recording` | `{"enabled": true\|false}` | Start/stop recording to an H.264 `.mp4` |
+| `GET /v1/status` | – | `connected`, `flying`, `recording`, `recording_file`, `battery` |
+
+Responses: `200` ok, `401` bad/missing key, `409` not allowed now (already flying, not flying, or another command still running), `422` invalid input, `502` the drone did not accept the command.
+
+```
+curl -X POST -H "X-API-Key: $API_KEY" http://<host>:8000/v1/takeoff
+curl -X POST -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+     -d '{"distance_cm": 100}' http://<host>:8000/v1/move/up
+curl -X POST -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+     -d '{"degrees": 90}' http://<host>:8000/v1/turn/right
+curl -X PUT  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+     -d '{"enabled": true}' http://<host>:8000/v1/recording
+curl -X POST -H "X-API-Key: $API_KEY" http://<host>:8000/v1/land
+```
+
+Notes:
+- Each call blocks until the drone has finished the movement (several seconds) and returns then. Only one command runs at a time; a second one gets `409`.
+- A keepalive is sent while flying so the Tello does not auto-land after 15 s of silence. On shutdown the service lands the drone and stops recording.
+- Run a single instance only (the Tello UDP ports can be bound once), i.e. do not use multiple workers.
+
+### Tests
+The tests use a fake drone, so no Tello is needed:
+```
+pip install -r tello_api/requirements-dev.txt
+python -m pytest tests
+```
 
 ## Usage
 ### API Reference

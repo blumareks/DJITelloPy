@@ -1,0 +1,709 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Tello REST API",
+    "description": "\nControl a DJI Tello drone over HTTP.\n\n**Trying it out in this page:** click **Authorize**, paste the value of the server's `API_KEY`,\nthen use **Try it out** on any endpoint. Every call except the docs themselves needs the key.\n\nEach flight command blocks until the drone has finished the movement (up to a few seconds), and\nonly one command can run at a time - a second request meanwhile gets `409`.\n\n**This moves a real drone.** Make sure the area is clear, and keep `POST /v1/land` at hand.\n",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/takeoff": {
+      "post": {
+        "tags": [
+          "Flight"
+        ],
+        "summary": "Take off",
+        "description": "Automatic take-off to about 1 m. Returns once the drone is hovering. `409` if it is already flying.",
+        "operationId": "takeoff_v1_takeoff_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/land": {
+      "post": {
+        "tags": [
+          "Flight"
+        ],
+        "summary": "Land",
+        "description": "Automatic landing. Always sent to the drone, even if the server thinks it is already on the ground.",
+        "operationId": "land_v1_land_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/move/{direction}": {
+      "post": {
+        "tags": [
+          "Flight"
+        ],
+        "summary": "Move up, down, left or right",
+        "description": "Fly the given distance in cm. `409` if the drone is not flying.",
+        "operationId": "move_v1_move__direction__post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "direction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Direction",
+              "description": "Direction to fly"
+            },
+            "description": "Direction to fly"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/turn/{direction}": {
+      "post": {
+        "tags": [
+          "Flight"
+        ],
+        "summary": "Turn left or right",
+        "description": "Rotate in place by the given angle. `right` is clockwise, `left` is counter-clockwise. `409` if the drone is not flying.",
+        "operationId": "turn_v1_turn__direction__post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "direction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TurnDirection",
+              "description": "Rotation direction"
+            },
+            "description": "Rotation direction"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/recording": {
+      "put": {
+        "tags": [
+          "Camera"
+        ],
+        "summary": "Start or stop video recording",
+        "description": "Turns the drone's video stream on and records it to an H.264 mp4 in the server's `RECORDINGS_DIR`; turning it off finishes the file. Idempotent: starting while already recording returns the current file. Works on the ground too.",
+        "operationId": "recording_v1_recording_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "summary": "Current state",
+        "description": "Server-side view of the drone. Does not send anything to the drone, so it is safe to call at any time, even during a movement.",
+        "operationId": "status_v1_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CommandResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "ok",
+            "examples": [
+              "ok"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "title": "Command",
+            "examples": [
+              "move up 50"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "command"
+        ],
+        "title": "CommandResult"
+      },
+      "Direction": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "left",
+          "right"
+        ],
+        "title": "Direction"
+      },
+      "ErrorResult": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResult"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MoveRequest": {
+        "properties": {
+          "distance_cm": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 20.0,
+            "title": "Distance Cm",
+            "description": "Distance in cm (Tello limits: 20-500)",
+            "examples": [
+              50
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "distance_cm"
+        ],
+        "title": "MoveRequest"
+      },
+      "RecordingRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "true starts recording, false stops it",
+            "examples": [
+              true
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "RecordingRequest"
+      },
+      "RecordingResult": {
+        "properties": {
+          "recording": {
+            "type": "boolean",
+            "title": "Recording",
+            "description": "Whether a recording is active after this call"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File",
+            "description": "File name inside the server's RECORDINGS_DIR",
+            "examples": [
+              "tello-20261101-013000.mp4"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "recording"
+        ],
+        "title": "RecordingResult"
+      },
+      "StatusResult": {
+        "properties": {
+          "connected": {
+            "type": "boolean",
+            "title": "Connected",
+            "description": "Whether the server has entered SDK mode with the drone"
+          },
+          "flying": {
+            "type": "boolean",
+            "title": "Flying"
+          },
+          "recording": {
+            "type": "boolean",
+            "title": "Recording"
+          },
+          "recording_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recording File"
+          },
+          "battery": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Battery",
+            "description": "Percent; null until the first state packet arrives",
+            "examples": [
+              87
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "connected",
+          "flying",
+          "recording",
+          "recording_file",
+          "battery"
+        ],
+        "title": "StatusResult"
+      },
+      "TurnDirection": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ],
+        "title": "TurnDirection"
+      },
+      "TurnRequest": {
+        "properties": {
+          "degrees": {
+            "type": "integer",
+            "maximum": 360.0,
+            "minimum": 1.0,
+            "title": "Degrees",
+            "description": "Angle in degrees",
+            "examples": [
+              90
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "degrees"
+        ],
+        "title": "TurnRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "description": "Value of the server's `API_KEY` environment variable",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Flight",
+      "description": "Take off, land, move and turn."
+    },
+    {
+      "name": "Camera",
+      "description": "Record the drone's video to an mp4 file on the server."
+    },
+    {
+      "name": "Status",
+      "description": "Read the current state without sending anything to the drone."
+    }
+  ]
+}
