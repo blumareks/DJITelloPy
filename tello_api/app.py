@@ -152,9 +152,16 @@ def create_app(controller: DroneController, api_key: str) -> FastAPI:
         controller.takeoff()
         return CommandResult(command="takeoff")
 
+    @router.post("/abort", response_model=CommandResult, tags=["Flight"], summary="Abort current movement",
+                 description="Makes the drone hover in place (Tello `stop`). Returns immediately (200), "
+                             "even while another command is running.")
+    def abort():
+        controller.abort()
+        return CommandResult(command="abort")
+
     @router.post("/land", response_model=CommandResult, tags=["Flight"], summary="Land",
-                 description="Automatic landing. Always sent to the drone, even if the server thinks "
-                             "it is already on the ground.")
+                 description="Automatic landing. Always sent to the drone, even if another command is "
+                             "running or the server thinks it is already on the ground.")
     def land():
         controller.land()
         return CommandResult(command="land")

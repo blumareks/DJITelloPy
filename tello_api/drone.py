@@ -117,6 +117,7 @@ class DroneController:
         self._recorder: Optional[VideoRecorder] = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._aborted = threading.Event()
         self._keepalive_thread: Optional[threading.Thread] = None
 
     # -- lifecycle ---------------------------------------------------------------------------
@@ -147,6 +148,10 @@ class DroneController:
             if not self._lock.acquire(blocking=False):
                 continue  # a command is running, which counts as activity
             try:
+                # Lock held means no command is in flight, so a leftover abort flag (set by
+                # POST /v1/abort while hovering) must not block the keepalive; otherwise the
+                # hovering drone would auto-land after 15 s without anyone asking for it.
+                self._aborted.clear()
                 tello.send_keepalive()
             except TelloException:
                 logger.warning("Keepalive failed", exc_info=True)
@@ -155,17 +160,99 @@ class DroneController:
 
     # -- helpers -----------------------------------------------------------------------------
 
+    def _drain_responses(self):
+        if self._tello is not None and hasattr(self._tello, "get_own_udp_object"):
+            try:
+                udp_obj = self._tello.get_own_udp_object()
+                if isinstance(udp_obj, dict) and "responses" in udp_obj:
+                    udp_obj["responses"].clear()
+            except Exception:
+                pass
+
+    def _wrap_tello(self, tello):
+        """Wrap command sending methods to respect self._aborted without retrying after abort."""
+        if not hasattr(tello, "send_control_command") or not hasattr(tello, "send_command_with_return"):
+            return
+
+        def wrapped_send_command_with_return(command: str, timeout: int = getattr(tello, "RESPONSE_TIMEOUT", 7)) -> str:
+            if self._aborted.is_set():
+                raise TelloException(f"Command '{command}' aborted")
+
+            diff = time.time() - tello.last_received_command_timestamp
+            if diff < tello.TIME_BTW_COMMANDS:
+                tello.LOGGER.debug("Waiting {} seconds to execute command: {}...".format(diff, command))
+                time.sleep(diff)
+
+            if self._aborted.is_set():
+                raise TelloException(f"Command '{command}' aborted")
+
+            tello.LOGGER.info("Send command: '{}'".format(command))
+            timestamp = time.time()
+
+            from djitellopy.tello import client_socket
+            client_socket.sendto(command.encode("utf-8"), tello.address)
+
+            responses = tello.get_own_udp_object()["responses"]
+
+            while not responses:
+                if self._aborted.is_set():
+                    raise TelloException(f"Command '{command}' aborted")
+                if time.time() - timestamp > timeout:
+                    message = "Aborting command '{}'. Did not receive a response after {} seconds".format(command, timeout)
+                    tello.LOGGER.warning(message)
+                    return message
+                time.sleep(0.05)
+
+            if self._aborted.is_set():
+                raise TelloException(f"Command '{command}' aborted")
+
+            tello.last_received_command_timestamp = time.time()
+            first_response = responses.pop(0)
+            try:
+                response = first_response.decode("utf-8")
+            except UnicodeDecodeError as e:
+                tello.LOGGER.error(e)
+                return "response decode error"
+            response = response.rstrip("\r\n")
+            tello.LOGGER.info("Response {}: '{}'".format(command, response))
+            return response
+
+        def wrapped_send_control_command(command: str, timeout: int = getattr(tello, "RESPONSE_TIMEOUT", 7)) -> bool:
+            if self._aborted.is_set():
+                raise TelloException(f"Command '{command}' aborted")
+            response = "max retries exceeded"
+            for i in range(0, tello.retry_count):
+                if self._aborted.is_set():
+                    raise TelloException(f"Command '{command}' aborted")
+                response = tello.send_command_with_return(command, timeout=timeout)
+                if self._aborted.is_set():
+                    raise TelloException(f"Command '{command}' aborted")
+                if "ok" in response.lower():
+                    return True
+                tello.LOGGER.debug("Command attempt #{} failed for command: '{}'".format(i, command))
+
+            tello.raise_result_error(command, response)
+            return False
+
+        tello.send_command_with_return = wrapped_send_command_with_return
+        tello.send_control_command = wrapped_send_control_command
+
     @contextmanager
     def _session(self):
         if not self._lock.acquire(blocking=False):
             raise Conflict("Another command is still running")
         try:
+            self._aborted.clear()
             if self._tello is None:
                 self._tello = self._factory()
+                self._wrap_tello(self._tello)
             if not self._connected:
                 self._tello.connect()
                 self._connected = True
+            self._drain_responses()
             yield self._tello
+            if self._aborted.is_set():
+                raise TelloException("Command aborted")
         except TelloException as exc:
             logger.error("Drone command failed: %s", exc)
             raise DroneCommandFailed() from exc
@@ -183,10 +270,46 @@ class DroneController:
                 raise Conflict("Drone is already flying")
             tello.takeoff()
 
+    def abort(self):
+        """Hover immediately. Can be called at any time, even while another command runs."""
+        self._aborted.set()
+        tello = self._tello
+        if tello is not None:
+            if hasattr(tello, "send_command_without_return"):
+                tello.send_command_without_return("stop")
+            elif hasattr(tello, "stop"):
+                tello.stop()
+
     def land(self):
         # Always sent, even if we think the drone is on the ground: our flag could be stale.
-        with self._session() as tello:
-            tello.land()
+        # If another command is currently running, preempt it without waiting for return.
+        if not self._lock.acquire(blocking=False):
+            self._aborted.set()
+            tello = self._tello
+            if tello is not None:
+                if hasattr(tello, "send_command_without_return"):
+                    tello.send_command_without_return("land")
+                elif hasattr(tello, "land"):
+                    tello.land()
+                if hasattr(tello, "is_flying"):
+                    tello.is_flying = False
+            return
+
+        try:
+            self._aborted.clear()
+            if self._tello is None:
+                self._tello = self._factory()
+                self._wrap_tello(self._tello)
+            if not self._connected:
+                self._tello.connect()
+                self._connected = True
+            self._drain_responses()
+            self._tello.land()
+        except TelloException as exc:
+            logger.error("Drone command failed: %s", exc)
+            raise DroneCommandFailed() from exc
+        finally:
+            self._lock.release()
 
     def move(self, direction: str, distance_cm: int):
         with self._session() as tello:

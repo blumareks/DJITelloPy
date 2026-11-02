@@ -63,13 +63,70 @@
         ]
       }
     },
+    "/v1/abort": {
+      "post": {
+        "tags": [
+          "Flight"
+        ],
+        "summary": "Abort current movement",
+        "description": "Makes the drone hover in place (Tello `stop`). Returns immediately (200), even while another command is running.",
+        "operationId": "abort_v1_abort_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid `X-API-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not allowed in the current state (already flying, not flying, or another command is still running)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The drone did not accept or answer the command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/v1/land": {
       "post": {
         "tags": [
           "Flight"
         ],
         "summary": "Land",
-        "description": "Automatic landing. Always sent to the drone, even if the server thinks it is already on the ground.",
+        "description": "Automatic landing. Always sent to the drone, even if another command is running or the server thinks it is already on the ground.",
         "operationId": "land_v1_land_post",
         "responses": {
           "200": {

@@ -117,7 +117,8 @@ All endpoints are under `/v1` and need the `X-API-Key` header. Request bodies ar
 | Method & path | Body | Action |
 |---|---|---|
 | `POST /v1/takeoff` | – | Take off |
-| `POST /v1/land` | – | Land |
+| `POST /v1/abort` | – | Abort current movement and hover in place |
+| `POST /v1/land` | – | Land (interrupts any running command) |
 | `POST /v1/move/{up\|down\|left\|right}` | `{"distance_cm": 20..500}` | Fly that distance |
 | `POST /v1/turn/{left\|right}` | `{"degrees": 1..360}` | Rotate |
 | `PUT /v1/recording` | `{"enabled": true\|false}` | Start/stop recording to an H.264 `.mp4` |
@@ -133,11 +134,12 @@ curl -X POST -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
      -d '{"degrees": 90}' http://<host>:8000/v1/turn/right
 curl -X PUT  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
      -d '{"enabled": true}' http://<host>:8000/v1/recording
+curl -X POST -H "X-API-Key: $API_KEY" http://<host>:8000/v1/abort
 curl -X POST -H "X-API-Key: $API_KEY" http://<host>:8000/v1/land
 ```
 
 Notes:
-- Each call blocks until the drone has finished the movement (several seconds) and returns then. Only one command runs at a time; a second one gets `409`.
+- Each call blocks until the drone has finished the movement (several seconds) and returns then. Only one command runs at a time; a second one gets `409` (except `POST /v1/abort` and `POST /v1/land`, which interrupt running commands).
 - A keepalive is sent while flying so the Tello does not auto-land after 15 s of silence. On shutdown the service lands the drone and stops recording.
 - Run a single instance only (the Tello UDP ports can be bound once), i.e. do not use multiple workers.
 

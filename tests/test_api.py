@@ -49,6 +49,17 @@ class FakeTello:
         self._do("land")
         self.is_flying = False
 
+    def stop(self):
+        self._do("stop")
+
+    def send_command_without_return(self, command):
+        if self.fail_next:
+            self.fail_next = False
+            raise TelloException("secret internal detail 192.168.10.1")
+        self.calls.append((command,))
+        if command == "land":
+            self.is_flying = False
+
     def move_up(self, x): self._do("up", x)
     def move_down(self, x): self._do("down", x)
     def move_left(self, x): self._do("left", x)
@@ -87,6 +98,8 @@ def client(tello, tmp_path):
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}, {"X-API-Key": KEY + "x"}])
 def test_rejects_missing_or_wrong_key(client, headers):
     assert client.post("/v1/takeoff", headers=headers).status_code == 401
+    assert client.post("/v1/abort", headers=headers).status_code == 401
+    assert client.post("/v1/land", headers=headers).status_code == 401
     assert client.get("/v1/status", headers=headers).status_code == 401
     assert client.tello.calls == []
 
@@ -177,6 +190,116 @@ def test_concurrent_command_gets_409(client):
     assert result["r"].status_code == 200
 
 
+def test_abort_idle(client):
+    client.post("/v1/takeoff", headers=HEADERS)
+    r = client.post("/v1/abort", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "command": "abort"}
+    assert ("stop",) in client.tello.calls
+
+
+def test_abort_mid_move(client):
+    client.post("/v1/takeoff", headers=HEADERS)
+    client.tello.block = threading.Event()
+    result = {}
+
+    def slow():
+        result["r"] = client.post("/v1/move/up", json={"distance_cm": 50}, headers=HEADERS)
+
+    t = threading.Thread(target=slow)
+    t.start()
+    time.sleep(0.3)
+    try:
+        r_abort = client.post("/v1/abort", headers=HEADERS)
+        assert r_abort.status_code == 200
+        assert r_abort.json() == {"status": "ok", "command": "abort"}
+        assert ("stop",) in client.tello.calls
+    finally:
+        client.tello.block.set()
+        t.join()
+    assert result["r"].status_code == 502
+    assert result["r"].json() == {"detail": "Drone command failed"}
+
+    # Next command works afterwards
+    r_next = client.post("/v1/move/down", json={"distance_cm": 50}, headers=HEADERS)
+    assert r_next.status_code == 200
+    assert ("down", 50) in client.tello.calls
+
+
+def test_land_mid_move(client):
+    client.post("/v1/takeoff", headers=HEADERS)
+    client.tello.block = threading.Event()
+    result = {}
+
+    def slow():
+        result["r"] = client.post("/v1/move/up", json={"distance_cm": 50}, headers=HEADERS)
+
+    t = threading.Thread(target=slow)
+    t.start()
+    time.sleep(0.3)
+    try:
+        r_land = client.post("/v1/land", headers=HEADERS)
+        assert r_land.status_code == 200
+        assert r_land.json() == {"status": "ok", "command": "land"}
+        assert ("land",) in client.tello.calls
+        assert client.get("/v1/status", headers=HEADERS).json()["flying"] is False
+    finally:
+        client.tello.block.set()
+        t.join()
+    assert result["r"].status_code == 502
+
+
+def test_no_resend_after_abort(tmp_path):
+    class RetryingTello(FakeTello):
+        def __init__(self):
+            super().__init__()
+            self.retry_count = 3
+            self.RESPONSE_TIMEOUT = 7
+            self.TIME_BTW_COMMANDS = 0
+            self.last_received_command_timestamp = 0
+            self.address = ("127.0.0.1", 8889)
+            self.LOGGER = type("Logger", (), {
+                "info": lambda *a: None, "debug": lambda *a: None,
+                "warning": lambda *a: None, "error": lambda *a: None,
+            })()
+            self._responses = []
+
+        def get_own_udp_object(self):
+            return {"responses": self._responses, "state": {}}
+
+        def raise_result_error(self, cmd, resp):
+            raise TelloException(f"Command '{cmd}' failed: {resp}")
+
+        def send_command_with_return(self, command: str, timeout: int = 7) -> str:
+            self._do(command)
+            return "error"
+
+        def send_control_command(self, command: str, timeout: int = 7) -> bool:
+            return False
+
+    tello = RetryingTello()
+    controller = DroneController(recordings_dir=tmp_path, tello_factory=lambda: tello)
+    with TestClient(create_app(controller, KEY)) as c:
+        c.post("/v1/takeoff", headers=HEADERS)
+        tello.block = threading.Event()
+        result = {}
+
+        def slow():
+            result["r"] = c.post("/v1/move/up", json={"distance_cm": 50}, headers=HEADERS)
+
+        t = threading.Thread(target=slow)
+        t.start()
+        time.sleep(0.3)
+        try:
+            c.post("/v1/abort", headers=HEADERS)
+        finally:
+            tello.block.set()
+            t.join()
+        assert result["r"].status_code == 502
+        up_calls = [call for call in tello.calls if call[0] in ("up 50", "up")]
+        assert len(up_calls) == 1
+
+
 def test_keepalive_sent_while_flying(client):
     client.post("/v1/takeoff", headers=HEADERS)
     time.sleep(0.4)
@@ -257,7 +380,7 @@ def test_swagger_ui_is_served_locally_without_credentials(client):
 def test_openapi_spec_describes_every_endpoint(client):
     spec = client.get("/openapi.json").json()
     expected = {
-        ("post", "/v1/takeoff"), ("post", "/v1/land"),
+        ("post", "/v1/takeoff"), ("post", "/v1/abort"), ("post", "/v1/land"),
         ("post", "/v1/move/{direction}"), ("post", "/v1/turn/{direction}"),
         ("put", "/v1/recording"), ("get", "/v1/status"),
     }
