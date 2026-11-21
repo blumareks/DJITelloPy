@@ -1,0 +1,9 @@
+# Read by Streamlit when started from this folder: cd fleet_ui && streamlit run fleet_ui.py
+[server]
+address = "127.0.0.1"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = "none"

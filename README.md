@@ -150,6 +150,61 @@ pip install -r tello_api/requirements-dev.txt
 python -m pytest tests
 ```
 
+## Fleet UI
+
+A Streamlit page (`fleet_ui/`) that controls several `tello_api` services (one per drone) at once. It talks
+to them over HTTPS only and does not import `djitellopy` or `tello_api`.
+
+### 1. HTTPS certificates
+Plain HTTP is not supported, because the API key would travel unencrypted. Create a private CA and one
+certificate per drone IP (needs `openssl`; output goes to `fleet_ui/certs/`, which git ignores):
+```
+fleet_ui/make_certs.sh 192.168.21.11 192.168.21.12
+```
+Copy `certs/<ip>/cert.pem` and `key.pem` to the matching Pi (the key is secret) and start its service:
+```
+API_KEY=... API_HOST=192.168.21.11 TLS_CERTFILE=cert.pem TLS_KEYFILE=key.pem python -m tello_api
+```
+`certs/ca.pem` is the CA bundle the UI needs. Keep `certs/ca.key` on this machine only.
+
+### 2. Run the UI
+```
+pip install -r fleet_ui/requirements.txt
+streamlit run fleet_ui/fleet_ui.py --server.address 127.0.0.1 --browser.gatherUsageStats false   # from the repository root
+```
+(Starting it from inside `fleet_ui/` instead picks up `fleet_ui/.streamlit/config.toml`, which sets the same.)
+Set the CA bundle in the page, or start with `FLEET_UI_CA_BUNDLE=fleet_ui/certs/ca.pem`.
+
+### 3. Using it
+- **Drones**: IP (must be inside `192.168.21.0/24`), port and API key per drone. Keys are only kept in the
+  browser session; they are never written to disk or logged.
+- **Script**: one instruction per row; blank rows and `#` comments are ignored. The whole script is checked
+  before anything is sent and errors are shown with row numbers.
+
+  | Instruction | Meaning |
+  |---|---|
+  | `takeoff`, `land` | take off / land |
+  | `up\|down\|left\|right <cm>` | move, 20-500 cm |
+  | `turn left\|right <degrees>` | rotate, 1-360 |
+  | `record on\|off` | start / stop video recording |
+  | `sleep <seconds>` | pause the whole fleet (max 600) |
+
+- **Execute** sends step N to all drones at once and starts step N+1 when all have answered. If any drone
+  fails a step the run halts and nothing more is sent automatically.
+- **Abort** makes all drones hover and stops the run. **Land all** lands all drones and stops the run. Both
+  work during a run and when idle (using the drone rows currently in the form).
+- Every call is logged as `drone N, ip, command, response` in the terminal running Streamlit and in the page.
+
+### Security notes
+The page itself has no login: keep it on loopback or a trusted host. Certificates are always verified; there
+is no option to turn that off.
+
+### Tests
+```
+pip install -r fleet_ui/requirements-dev.txt
+python -m pytest tests/test_fleet_steps.py tests/test_fleet_engine.py tests/test_fleet_page.py
+```
+
 ## Usage
 ### API Reference
 See [djitellopy.readthedocs.io](https://djitellopy.readthedocs.io/en/latest/) for a full reference of all classes and methods available.

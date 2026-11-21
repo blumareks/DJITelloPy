@@ -103,7 +103,7 @@ before anything is sent; errors are reported with row numbers.
   3. Unit tests: every valid instruction, every error case, row numbering, empty script.
 - **Relevant Context**: `tello_api/app.py` (`MoveRequest`, `TurnRequest` limits; route shapes),
   `tests/` layout.
-- **Status**: `[ ] pending`
+- **Status**: `[x] done`
 
 ### 3. Fleet UI: API client and run engine
 - **Intent**: execute a validated script against all drones, with abort and land-all, independent of the UI.
@@ -126,7 +126,7 @@ before anything is sent; errors are reported with row numbers.
      a request, land all, failure halts run, key never in logs, TLS verification on.
 - **Relevant Context**: REST contract in `tello_api/app.py` and `tello_api/docs/openapi.json`; error codes
   200/401/409/422/502.
-- **Status**: `[ ] pending`
+- **Status**: `[x] done`
 
 ### 4. Fleet UI: Streamlit page
 - **Intent**: the operator-facing app, `fleet_ui/fleet_ui.py`.
@@ -146,7 +146,7 @@ before anything is sent; errors are reported with row numbers.
      against the fake server.
 - **Relevant Context**: sub-tasks 2 and 3 modules; Streamlit reruns the script on each interaction, so run
   state must live outside the script (shared engine object).
-- **Status**: `[ ] pending`
+- **Status**: `[x] done`
 
 ### 5. TLS helper and run instructions
 - **Intent**: make HTTPS practical in the lab so keys are never sent in clear text.
@@ -160,7 +160,7 @@ before anything is sent; errors are reported with row numbers.
   3. Check that the UI rejects a service whose certificate is not signed by the CA.
 - **Relevant Context**: `tello_api/__main__.py` (TLS env vars already supported), `README.md` REST API
   section.
-- **Status**: `[ ] pending`
+- **Status**: `[x] done`
 
 ### 6. Documentation, dependencies, final validation
 - **Intent**: leave the repo consistent and verified.
@@ -174,7 +174,7 @@ before anything is sent; errors are reported with row numbers.
   3. Run the complete test suite (existing 36 + new) and a manual smoke run of `streamlit run`.
 - **Relevant Context**: `README.md`, `tello_api/requirements*.txt`, `Dockerfile` (Python 3.12 base),
   `.gitignore`.
-- **Status**: `[ ] pending`
+- **Status**: `[x] done`
 
 ## Non-goals
 - Per-drone different scripts, loops/conditionals, saving/loading scripts, container image for the UI,

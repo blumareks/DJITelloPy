@@ -105,3 +105,6 @@ venv.bak/
 
 # Tello REST API recordings
 recordings/
+
+# Fleet UI generated certificates and keys
+fleet_ui/certs/
