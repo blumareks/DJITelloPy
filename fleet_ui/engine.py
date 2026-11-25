@@ -9,9 +9,10 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Callable, Deque, List, Optional, Sequence, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
-from .client import CallResult, DroneConfig, DroneInfo, TelloApiClient, clean_text, info_from_result
+from .client import (CallResult, DroneConfig, DroneInfo, TelloApiClient, clean_text, endpoint_key,
+                     info_from_result)
 from .steps import Step
 
 logger = logging.getLogger("fleet_ui")
@@ -54,6 +55,7 @@ class FleetEngine:
         self._stop_reason = ABORTED
         self._thread: Optional[threading.Thread] = None
         self._active: Optional[Tuple[Tuple[DroneConfig, ...], Optional[str]]] = None
+        self._infos: Dict[Tuple[str, str], DroneInfo] = {}   # last known state per (ip, port)
 
     # ----- read side (used by the UI) -----
     def state(self) -> RunState:
@@ -67,6 +69,11 @@ class FleetEngine:
     def logs(self) -> List[str]:
         with self._lock:
             return list(self._log)
+
+    def info_for(self, ip: str, port) -> Optional[DroneInfo]:
+        """Last status known for this drone (from the Status button or from a run), if any."""
+        with self._lock:
+            return self._infos.get(endpoint_key(ip, port))
 
     def clear_log(self) -> None:
         with self._lock:
@@ -115,11 +122,19 @@ class FleetEngine:
             return []
         numbers = tuple(numbers) if numbers else tuple(range(1, len(drones) + 1))
         clients = [self._factory(d, ca_bundle) for d in drones]
+        return self._poll_status(drones, clients, numbers)
+
+    def _poll_status(self, drones: Tuple[DroneConfig, ...], clients: List[TelloApiClient],
+                     numbers: Sequence[int]) -> List[DroneInfo]:
+        """GET /v1/status on every drone at once; log each answer and remember it."""
 
         def send(i: int) -> DroneInfo:
             label, result = clients[i].status()
             self._log_call(numbers[i], drones[i], label, result.text)
-            return info_from_result(result)
+            info = info_from_result(result)
+            with self._lock:
+                self._infos[endpoint_key(drones[i].ip, drones[i].port)] = info
+            return info
 
         return self._fan_out(len(drones), send)
 
@@ -170,13 +185,21 @@ class FleetEngine:
     def _run(self, drones: Tuple[DroneConfig, ...], steps: Tuple[Step, ...],
              ca_bundle: Optional[str]) -> None:
         clients = [self._factory(d, ca_bundle) for d in drones]
+        numbers = tuple(range(1, len(drones) + 1))
         outcome, message = FINISHED, "all steps completed"
         try:
             for position, step in enumerate(steps, start=1):
                 if self._stop.is_set():
                     break
                 self._update(current_step=position, step_text=step.text,
-                             drone_status=("running",) * len(drones))
+                             drone_status=("checking status",) * len(drones))
+                # Status of every drone before every row of the script (also refreshes the UI labels).
+                # It is informational: a drone that does not answer does not stop the run here;
+                # the step itself will fail on it if the drone is really unreachable.
+                self._poll_status(drones, clients, numbers)
+                if self._stop.is_set():
+                    break
+                self._update(drone_status=("running",) * len(drones))
                 if step.kind == "sleep":
                     self._sleep(step)
                     continue
@@ -192,6 +215,9 @@ class FleetEngine:
                 outcome = self._stop_reason
                 message = ("aborted: drones hover" if outcome == ABORTED
                            else "land all requested")
+            else:
+                # Show the state the drones ended up in (e.g. green flying -> red on ground after `land`).
+                self._poll_status(drones, clients, numbers)
         except Exception:  # keep the thread from dying silently; details stay in the terminal
             logger.exception("fleet run crashed")
             outcome, message = HALTED, "internal error, see terminal"

@@ -87,8 +87,12 @@ class FakeDrone:
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05},
                          daemon=True).start()
 
+    def command_requests(self):
+        """Requests other than the GET /v1/status that is sent before every step."""
+        return [r for r in self.requests if r[2] != "/v1/status"]
+
     def paths(self):
-        return [r[2] for r in self.requests]
+        return [r[2] for r in self.command_requests()]
 
     def close(self):
         for gate in self.hold.values():
@@ -131,7 +135,7 @@ def test_lockstep_order_requests_and_log_format(fleet, certs):
     engine.join(10)
     assert engine.state().status == FINISHED
     for drone in fleet:
-        assert [(r[1], r[2], r[3]) for r in drone.requests] == [
+        assert [(r[1], r[2], r[3]) for r in drone.command_requests()] == [
             ("POST", "/v1/takeoff", None),
             ("POST", "/v1/move/up", {"distance_cm": 50}),
             ("POST", "/v1/turn/left", {"degrees": 90}),
@@ -139,10 +143,25 @@ def test_lockstep_order_requests_and_log_format(fleet, certs):
             ("POST", "/v1/land", None),
         ]
     assert fleet[0].requests[0][4] == KEY1 and fleet[1].requests[0][4] == KEY2
+    assert all(r[4] == KEY1 for r in fleet[0].requests) and all(r[4] == KEY2 for r in fleet[1].requests)
     lines = engine.logs()
-    assert len(lines) == 10
+    # per drone: 5 commands + a status poll before each of the 5 steps + 1 final poll = 11 lines
+    assert len(lines) == 22
     assert any(l.endswith("drone 1, 127.0.0.1, takeoff, 200 ok") for l in lines)
     assert any(l.endswith("drone 2, 127.0.0.1, up 50, 200 ok") for l in lines)
+
+
+def test_forward_and_back_are_sent_to_the_move_endpoint(fleet, certs):
+    engine = FleetEngine()
+    engine.start(configs(fleet), steps("takeoff\nforward 120\nback 40\nland"), str(certs[0] / "ca.pem"))
+    engine.join(10)
+    assert engine.state().status == FINISHED
+    for drone in fleet:
+        assert [(r[1], r[2], r[3]) for r in drone.command_requests()][1:3] == [
+            ("POST", "/v1/move/forward", {"distance_cm": 120}),
+            ("POST", "/v1/move/back", {"distance_cm": 40}),
+        ]
+    assert any("drone 1, 127.0.0.1, forward 120, 200 ok" in l for l in engine.logs())
 
 
 def test_next_step_waits_for_slowest_drone(fleet, certs, monkeypatch):
@@ -160,7 +179,7 @@ def test_next_step_waits_for_slowest_drone(fleet, certs, monkeypatch):
     engine.join(10)
     assert engine.state().status == FINISHED
     # drone 1 answered takeoff at once but only got "up 30" after drone 2 had finished takeoff
-    assert fleet[0].requests[1][0] - started >= 0.4
+    assert fleet[0].command_requests()[1][0] - started >= 0.4
 
 
 def test_sleep_timing(fleet, certs):
@@ -168,7 +187,7 @@ def test_sleep_timing(fleet, certs):
     started = time.monotonic()
     engine.start(configs(fleet), steps("sleep 0.5\ntakeoff"), str(certs[0] / "ca.pem"))
     engine.join(10)
-    assert fleet[0].requests[0][0] - started >= 0.5
+    assert fleet[0].command_requests()[0][0] - started >= 0.5
     assert engine.state().status == FINISHED
 
 
@@ -361,6 +380,79 @@ def test_info_from_result_is_defensive():
     assert info_from_result(ok({"flying": "yes"})) == DroneInfo(reachable=False)
     assert info_from_result(ok(None)) == DroneInfo(reachable=False)
     assert info_from_result(CallResult(False, 401, "401 x", None)) == DroneInfo(reachable=False)
+
+
+def status_paths(drone):
+    return [r[2] for r in drone.requests]
+
+
+def test_status_is_sent_to_every_drone_before_every_step(fleet, certs):
+    fleet[0].responses["/v1/status"] = (200, STATUS_FLYING)
+    fleet[1].responses["/v1/status"] = (200, STATUS_GROUND)
+    engine = FleetEngine()
+    engine.start(configs(fleet), steps("takeoff\nsleep 0.1\nup 50\nland"), str(certs[0] / "ca.pem"))
+    engine.join(10)
+    assert engine.state().status == FINISHED
+    for drone in fleet:
+        # one status before each of the 4 rows (sleep included) and one at the end
+        assert status_paths(drone) == ["/v1/status", "/v1/takeoff", "/v1/status", "/v1/status",
+                                       "/v1/move/up", "/v1/status", "/v1/land", "/v1/status"]
+        assert all(r[4] in (KEY1, KEY2) for r in drone.requests)
+    assert sum("status, 200" in l for l in engine.logs()) == 10
+
+
+def test_status_results_update_the_latest_known_info(fleet, certs):
+    fleet[0].responses["/v1/status"] = (200, STATUS_FLYING)
+    fleet[1].responses["/v1/status"] = (200, STATUS_GROUND)
+    engine = FleetEngine()
+    assert engine.info_for("127.0.0.1", fleet[0].port) is None
+    engine.start(configs(fleet), steps("takeoff"), str(certs[0] / "ca.pem"))
+    engine.join(10)
+    assert engine.info_for("127.0.0.1", fleet[0].port) == DroneInfo(True, True, 87, True)
+    assert engine.info_for(" 127.0.0.1 ", str(fleet[1].port)) == DroneInfo(True, False, 42, True)
+    assert engine.info_for("127.0.0.1", 1) is None
+
+
+def test_status_value_changes_during_the_run(fleet, certs):
+    fleet[0].responses["/v1/status"] = (200, STATUS_GROUND)
+    engine = FleetEngine()
+    ca = str(certs[0] / "ca.pem")
+    engine.start(configs(fleet)[:1], steps("sleep 0.3\nsleep 30"), ca)
+    assert wait_for(lambda: engine.info_for("127.0.0.1", fleet[0].port) is not None)
+    assert engine.info_for("127.0.0.1", fleet[0].port).flying is False
+    fleet[0].responses["/v1/status"] = (200, STATUS_FLYING)         # the drone took off meanwhile
+    assert wait_for(lambda: engine.info_for("127.0.0.1", fleet[0].port).flying is True)
+    engine.abort()
+    engine.join(10)
+
+
+def test_unreachable_status_does_not_stop_the_run_but_the_step_does(fleet, certs):
+    fleet[0].responses["/v1/status"] = (500, {"detail": "boom"})
+    engine = FleetEngine()
+    engine.start(configs(fleet)[:1], steps("takeoff\nland"), str(certs[0] / "ca.pem"))
+    engine.join(10)
+    assert engine.state().status == FINISHED                       # status is informational only
+    assert engine.info_for("127.0.0.1", fleet[0].port) == DroneInfo(reachable=False)
+    assert "/v1/takeoff" in status_paths(fleet[0]) and "/v1/land" in status_paths(fleet[0])
+
+
+def test_abort_after_status_poll_sends_no_more_steps(fleet, certs):
+    engine = FleetEngine()
+    ca = str(certs[0] / "ca.pem")
+    engine.start(configs(fleet), steps("sleep 30\ntakeoff"), ca)
+    assert wait_for(lambda: engine.state().current_step == 1 and "/v1/status" in status_paths(fleet[0]))
+    engine.abort()
+    engine.join(10)
+    assert engine.state().status == ABORTED
+    assert "/v1/takeoff" not in status_paths(fleet[0])
+    assert status_paths(fleet[0]).count("/v1/status") == 1         # no end-of-run poll after an abort
+
+
+def test_status_polling_keeps_keys_out_of_logs(fleet, certs):
+    engine = FleetEngine()
+    engine.start(configs(fleet), steps("takeoff"), str(certs[0] / "ca.pem"))
+    engine.join(10)
+    assert KEY1 not in "\n".join(engine.logs()) and KEY2 not in "\n".join(engine.logs())
 
 
 def test_check_drone():

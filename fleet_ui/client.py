@@ -41,6 +41,14 @@ class CallResult:
     data: Optional[dict] = None   # parsed JSON body of a successful response
 
 
+def endpoint_key(ip, port) -> Tuple[str, str]:
+    """Normalised (ip, port) used to match a drone row in the UI with its last known status."""
+    port_text = str(port).strip()
+    if port_text.isascii() and port_text.isdigit():
+        port_text = str(int(port_text))
+    return str(ip).strip(), port_text
+
+
 @dataclass(frozen=True)
 class DroneInfo:
     """What `GET /v1/status` told us about one drone (reachable=False if there was no answer)."""

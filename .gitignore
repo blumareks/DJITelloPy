@@ -108,3 +108,6 @@ recordings/
 
 # Fleet UI generated certificates and keys
 fleet_ui/certs/
+
+# Fleet UI saved setup (drones, script, encrypted keys)
+fleet_ui/drones.txt

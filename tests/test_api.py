@@ -64,6 +64,8 @@ class FakeTello:
     def move_down(self, x): self._do("down", x)
     def move_left(self, x): self._do("left", x)
     def move_right(self, x): self._do("right", x)
+    def move_forward(self, x): self._do("forward", x)
+    def move_back(self, x): self._do("back", x)
     def rotate_clockwise(self, x): self._do("cw", x)
     def rotate_counter_clockwise(self, x): self._do("ccw", x)
     def streamon(self): self._do("streamon")
@@ -119,7 +121,7 @@ def test_takeoff_twice_conflicts(client):
     assert client.post("/v1/takeoff", headers=HEADERS).status_code == 409
 
 
-@pytest.mark.parametrize("direction", ["up", "down", "left", "right"])
+@pytest.mark.parametrize("direction", ["up", "down", "left", "right", "forward", "back"])
 def test_move(client, direction):
     client.post("/v1/takeoff", headers=HEADERS)
     r = client.post("/v1/move/" + direction, json={"distance_cm": 50}, headers=HEADERS)
@@ -133,6 +135,27 @@ def test_turn(client, direction, cmd):
     r = client.post("/v1/turn/" + direction, json={"degrees": 90}, headers=HEADERS)
     assert r.status_code == 200
     assert (cmd, 90) in client.tello.calls
+
+
+def test_forward_and_back_response_and_validation(client):
+    client.post("/v1/takeoff", headers=HEADERS)
+    r = client.post("/v1/move/forward", json={"distance_cm": 120}, headers=HEADERS)
+    assert r.json() == {"status": "ok", "command": "move forward 120"}
+    r = client.post("/v1/move/back", json={"distance_cm": 20}, headers=HEADERS)
+    assert r.json() == {"status": "ok", "command": "move back 20"}
+    assert client.tello.calls[-2:] == [("forward", 120), ("back", 20)]
+    for direction in ("forward", "back"):
+        for body in ({}, {"distance_cm": 19}, {"distance_cm": 501}, {"distance_cm": "far"}):
+            assert client.post("/v1/move/" + direction, json=body, headers=HEADERS).status_code == 422
+    assert client.post("/v1/move/backwards", json={"distance_cm": 50}, headers=HEADERS).status_code == 422
+    assert client.tello.calls[-2:] == [("forward", 120), ("back", 20)]       # nothing sent for bad requests
+
+
+def test_forward_and_back_require_flying_and_auth(client):
+    for direction in ("forward", "back"):
+        assert client.post("/v1/move/" + direction, json={"distance_cm": 50}, headers=HEADERS).status_code == 409
+        assert client.post("/v1/move/" + direction, json={"distance_cm": 50}).status_code == 401
+    assert not [c for c in client.tello.calls if c[0] in ("forward", "back")]
 
 
 def test_move_and_turn_require_flying(client):
@@ -157,7 +180,7 @@ def test_turn_validation(client, body):
 
 
 def test_unknown_direction(client):
-    assert client.post("/v1/move/forward", json={"distance_cm": 50}, headers=HEADERS).status_code == 422
+    assert client.post("/v1/move/diagonal", json={"distance_cm": 50}, headers=HEADERS).status_code == 422
     assert client.post("/v1/turn/up", json={"degrees": 5}, headers=HEADERS).status_code == 422
 
 
@@ -400,7 +423,7 @@ def test_openapi_spec_describes_every_endpoint(client):
     schemas = spec["components"]["schemas"]
     move_ref = spec["paths"]["/v1/move/{direction}"]["post"]["parameters"][0]["schema"]["$ref"]
     turn_ref = spec["paths"]["/v1/turn/{direction}"]["post"]["parameters"][0]["schema"]["$ref"]
-    assert schemas[move_ref.rsplit("/", 1)[1]]["enum"] == ["up", "down", "left", "right"]
+    assert schemas[move_ref.rsplit("/", 1)[1]]["enum"] == ["up", "down", "left", "right", "forward", "back"]
     assert schemas[turn_ref.rsplit("/", 1)[1]]["enum"] == ["left", "right"]
 
     move_body = spec["components"]["schemas"]["MoveRequest"]["properties"]["distance_cm"]

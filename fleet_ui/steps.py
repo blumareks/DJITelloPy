@@ -4,7 +4,7 @@ Language (one instruction per row, case-insensitive, extra whitespace allowed)::
 
     takeoff
     land
-    up|down|left|right <cm 20-500>
+    up|down|left|right|forward|back <cm 20-500>
     turn left|right <degrees 1-360>
     record on|off
     sleep <seconds, > 0 and <= 600>
@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Union
 
-MOVE_DIRECTIONS = ("up", "down", "left", "right")
+MOVE_DIRECTIONS = ("up", "down", "left", "right", "forward", "back")
 TURN_DIRECTIONS = ("left", "right")
 MOVE_MIN_CM, MOVE_MAX_CM = 20, 500
 TURN_MIN_DEG, TURN_MAX_DEG = 1, 360
@@ -24,7 +24,7 @@ SLEEP_MAX_S = 600
 _INT = re.compile(r"[0-9]{1,9}")
 _DECIMAL = re.compile(r"[0-9]{1,6}(\.[0-9]{1,3})?")
 
-SYNTAX_HELP = ("takeoff | land | up|down|left|right <20-500 cm> | turn left|right <1-360 deg> | "
+SYNTAX_HELP = ("takeoff | land | up|down|left|right|forward|back <20-500 cm> | turn left|right <1-360 deg> | "
                "record on|off | sleep <seconds>")
 
 

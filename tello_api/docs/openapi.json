@@ -182,8 +182,8 @@
         "tags": [
           "Flight"
         ],
-        "summary": "Move up, down, left or right",
-        "description": "Fly the given distance in cm. `409` if the drone is not flying.",
+        "summary": "Move up, down, left, right, forward or back",
+        "description": "Fly the given distance in cm. `forward` and `back` move along the direction the drone is facing. `409` if the drone is not flying.",
         "operationId": "move_v1_move__direction__post",
         "security": [
           {
@@ -522,7 +522,9 @@
           "up",
           "down",
           "left",
-          "right"
+          "right",
+          "forward",
+          "back"
         ],
         "title": "Direction"
       },

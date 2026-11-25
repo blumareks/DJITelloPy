@@ -17,9 +17,10 @@ def errors(text):
 
 def test_every_valid_instruction():
     steps = ok("takeoff\nland\nup 20\ndown 500\nleft 50\nright 100\n"
-               "turn left 1\nturn right 360\nrecord on\nrecord off\nsleep 2.5")
+               "turn left 1\nturn right 360\nrecord on\nrecord off\nsleep 2.5\nforward 20\nback 500")
     assert [s.kind for s in steps] == ["takeoff", "land", "move", "move", "move", "move",
-                                       "turn", "turn", "record", "record", "sleep"]
+                                       "turn", "turn", "record", "record", "sleep", "move", "move"]
+    assert [(s.direction, s.value) for s in steps[-2:]] == [("forward", 20), ("back", 500)]
     assert steps[2] == Step(1 + 2, "move", "up", 20)
     assert steps[7] == Step(8, "turn", "right", 360)
     assert steps[8].value is True and steps[9].value is False
@@ -60,6 +61,13 @@ def test_row_numbers_count_blank_rows_and_all_errors_are_reported():
 def test_invalid_instructions(line):
     assert isinstance(parse_row(7, line), type(errors(line)[0]))
     assert errors(line)[0].row == 1
+
+
+def test_forward_and_back():
+    assert [s.text for s in ok("FORWARD 100\n  Back   30  # trailing")] == ["forward 100", "back 30"]
+    for line in ("forward", "back", "forward 19", "back 501", "forward x", "back 10 20", "back -30",
+                 "backward 50", "forwards 50"):
+        assert errors(line)[0].row == 1
 
 
 def test_sleep_limits():

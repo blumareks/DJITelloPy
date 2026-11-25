@@ -19,6 +19,8 @@ _MOVES = {
     "down": "move_down",
     "left": "move_left",
     "right": "move_right",
+    "forward": "move_forward",
+    "back": "move_back",
 }
 _TURNS = {
     "right": "rotate_clockwise",

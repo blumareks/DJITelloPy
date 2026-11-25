@@ -119,7 +119,7 @@ All endpoints are under `/v1` and need the `X-API-Key` header. Request bodies ar
 | `POST /v1/takeoff` | – | Take off |
 | `POST /v1/abort` | – | Abort current movement and hover in place |
 | `POST /v1/land` | – | Land (interrupts any running command) |
-| `POST /v1/move/{up\|down\|left\|right}` | `{"distance_cm": 20..500}` | Fly that distance |
+| `POST /v1/move/{up\|down\|left\|right\|forward\|back}` | `{"distance_cm": 20..500}` | Fly that distance (`forward`/`back` follow the direction the drone faces) |
 | `POST /v1/turn/{left\|right}` | `{"degrees": 1..360}` | Rotate |
 | `PUT /v1/recording` | `{"enabled": true\|false}` | Start/stop recording to an H.264 `.mp4` |
 | `GET /v1/status` | – | `connected`, `flying`, `recording`, `recording_file`, `battery` |
@@ -130,6 +130,8 @@ Responses: `200` ok, `401` bad/missing key, `409` not allowed now (already flyin
 curl -X POST -H "X-API-Key: $API_KEY" http://<host>:8000/v1/takeoff
 curl -X POST -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
      -d '{"distance_cm": 100}' http://<host>:8000/v1/move/up
+curl -X POST -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+     -d '{"distance_cm": 100}' http://<host>:8000/v1/move/forward
 curl -X POST -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
      -d '{"degrees": 90}' http://<host>:8000/v1/turn/right
 curl -X PUT  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
@@ -177,26 +179,37 @@ Set the CA bundle in the page, or start with `FLEET_UI_CA_BUNDLE=fleet_ui/certs/
 
 ### 3. Using it
 - **Drones**: IP (must be inside `192.168.4.0/24`), port and API key per drone. Keys are only kept in the
-  browser session; they are never written to disk or logged.
+  browser session and are never logged (see **Save** below for storing them encrypted).
 - **Script**: one instruction per row; blank rows and `#` comments are ignored. The whole script is checked
   before anything is sent and errors are shown with row numbers.
 
   | Instruction | Meaning |
   |---|---|
   | `takeoff`, `land` | take off / land |
-  | `up\|down\|left\|right <cm>` | move, 20-500 cm |
+  | `up\|down\|left\|right\|forward\|back <cm>` | move, 20-500 cm |
   | `turn left\|right <degrees>` | rotate, 1-360 |
   | `record on\|off` | start / stop video recording |
   | `sleep <seconds>` | pause the whole fleet (max 600) |
 
-- **Execute** sends step N to all drones at once and starts step N+1 when all have answered. If any drone
-  fails a step the run halts and nothing more is sent automatically.
+- **Execute** first asks every drone for its status (`GET /v1/status`), then sends step N to all drones at
+  once, and starts step N+1 (again preceded by a status check) when all have answered. The status check
+  runs before every row, `sleep` rows included, and once more at the end, so the green/red
+  `flying NN%` / `on ground NN%` labels next to each drone (battery %) refresh during the run. The check is
+  informational: a drone that does not answer it shows `no answer` but does not stop the run by itself. If
+  any drone fails a step the run halts and nothing more is sent automatically.
 - **Abort** makes all drones hover and stops the run. **Land all** lands all drones and stops the run. Both
   work during a run and when idle (using the drone rows currently in the form).
 - **Status** asks every drone's service for its state (`GET /v1/status`, which never moves a drone) and
   shows it next to the drone label: green `flying NN%` when flying, red `on ground NN%` when on the ground
   (NN = battery), gray `no answer` if the service did not answer. It also works during a run. The result is
   a snapshot from the moment of the click and is hidden if you edit that drone's IP.
+- **Save** writes IP, port, CA bundle path and the script to `fleet_ui/drones.txt` (JSON; override the path
+  with `FLEET_UI_DRONES_FILE`; git ignores it). The page loads this file when it starts. **API keys are
+  secrets, so they are never written in clear text:** enter a passphrase (8+ characters) before **Save** and
+  the keys are stored encrypted (AES-256-GCM, key derived with scrypt); on the next start enter the same
+  passphrase and press **Unlock keys** to fill them in. Without a passphrase the keys are left out and you
+  type them each time. The passphrase is never stored, and a lost passphrase cannot be recovered. Saving
+  without a passphrase removes keys saved earlier. The file is created with owner-only permissions.
 - Every call is logged as `drone N, ip, command, response` in the terminal running Streamlit and in the page.
 
 ### Security notes
@@ -206,7 +219,7 @@ is no option to turn that off.
 ### Tests
 ```
 pip install -r fleet_ui/requirements-dev.txt
-python -m pytest tests/test_fleet_steps.py tests/test_fleet_engine.py tests/test_fleet_page.py
+python -m pytest tests/test_fleet_steps.py tests/test_fleet_engine.py tests/test_fleet_storage.py tests/test_fleet_page.py
 ```
 
 ## Usage

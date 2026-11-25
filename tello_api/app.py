@@ -44,6 +44,8 @@ class Direction(str, Enum):
     down = "down"
     left = "left"
     right = "right"
+    forward = "forward"
+    back = "back"
 
 
 class TurnDirection(str, Enum):
@@ -167,8 +169,9 @@ def create_app(controller: DroneController, api_key: str) -> FastAPI:
         return CommandResult(command="land")
 
     @router.post("/move/{direction}", response_model=CommandResult, tags=["Flight"],
-                 summary="Move up, down, left or right",
-                 description="Fly the given distance in cm. `409` if the drone is not flying.")
+                 summary="Move up, down, left, right, forward or back",
+                 description="Fly the given distance in cm. `forward` and `back` move along the "
+                             "direction the drone is facing. `409` if the drone is not flying.")
     def move(body: MoveRequest,
              direction: Direction = PathParam(description="Direction to fly")):
         controller.move(direction.value, body.distance_cm)
