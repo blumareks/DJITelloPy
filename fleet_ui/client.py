@@ -14,7 +14,7 @@ import requests
 
 from .steps import Step
 
-DEFAULT_NETWORK = ipaddress.ip_network("192.168.21.0/24")
+DEFAULT_NETWORK = ipaddress.ip_network("192.168.4.0/24")
 
 CONNECT_TIMEOUT_S = 5
 TIMEOUT_ABORT_S = 5
