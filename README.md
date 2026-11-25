@@ -159,11 +159,11 @@ to them over HTTPS only and does not import `djitellopy` or `tello_api`.
 Plain HTTP is not supported, because the API key would travel unencrypted. Create a private CA and one
 certificate per drone IP (needs `openssl`; output goes to `fleet_ui/certs/`, which git ignores):
 ```
-fleet_ui/make_certs.sh 192.168.21.11 192.168.21.12
+fleet_ui/make_certs.sh 192.168.4.11 192.168.4.12
 ```
 Copy `certs/<ip>/cert.pem` and `key.pem` to the matching Pi (the key is secret) and start its service:
 ```
-API_KEY=... API_HOST=192.168.21.11 TLS_CERTFILE=cert.pem TLS_KEYFILE=key.pem python -m tello_api
+API_KEY=... API_HOST=192.168.4.11 TLS_CERTFILE=cert.pem TLS_KEYFILE=key.pem python -m tello_api
 ```
 `certs/ca.pem` is the CA bundle the UI needs. Keep `certs/ca.key` on this machine only.
 
@@ -176,7 +176,7 @@ streamlit run fleet_ui/fleet_ui.py --server.address 127.0.0.1 --browser.gatherUs
 Set the CA bundle in the page, or start with `FLEET_UI_CA_BUNDLE=fleet_ui/certs/ca.pem`.
 
 ### 3. Using it
-- **Drones**: IP (must be inside `192.168.21.0/24`), port and API key per drone. Keys are only kept in the
+- **Drones**: IP (must be inside `192.168.4.0/24`), port and API key per drone. Keys are only kept in the
   browser session; they are never written to disk or logged.
 - **Script**: one instruction per row; blank rows and `#` comments are ignored. The whole script is checked
   before anything is sent and errors are shown with row numbers.
@@ -193,6 +193,10 @@ Set the CA bundle in the page, or start with `FLEET_UI_CA_BUNDLE=fleet_ui/certs/
   fails a step the run halts and nothing more is sent automatically.
 - **Abort** makes all drones hover and stops the run. **Land all** lands all drones and stops the run. Both
   work during a run and when idle (using the drone rows currently in the form).
+- **Status** asks every drone's service for its state (`GET /v1/status`, which never moves a drone) and
+  shows it next to the drone label: green `flying NN%` when flying, red `on ground NN%` when on the ground
+  (NN = battery), gray `no answer` if the service did not answer. It also works during a run. The result is
+  a snapshot from the moment of the click and is hidden if you edit that drone's IP.
 - Every call is logged as `drone N, ip, command, response` in the terminal running Streamlit and in the page.
 
 ### Security notes

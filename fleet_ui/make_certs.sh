@@ -2,7 +2,7 @@
 # Create a private CA and one TLS certificate per drone IP (IP is in the subject alternative names).
 #
 # Usage: fleet_ui/make_certs.sh [-o OUTPUT_DIR] IP [IP ...]
-#   e.g. fleet_ui/make_certs.sh 192.168.21.11 192.168.21.12
+#   e.g. fleet_ui/make_certs.sh 192.168.4.11 192.168.4.12
 #
 # Output (default fleet_ui/certs/, ignored by git):
 #   ca.pem                 CA certificate: give this to the UI ("CA bundle"); not secret

@@ -8,6 +8,7 @@ from streamlit.proto.TextInput_pb2 import TextInput
 from streamlit.testing.v1 import AppTest
 
 import fleet_ui.engine as engine_module
+from fleet_ui.client import DroneInfo
 from fleet_ui.engine import IDLE, RunState
 
 PAGE = str(Path(__file__).resolve().parent.parent / "fleet_ui" / "fleet_ui.py")
@@ -20,6 +21,11 @@ class RecordingEngine:
         RecordingEngine.instance = self
         self.calls = []
         self.running = False
+        self.infos = {}        # ip -> DroneInfo returned by read_status
+
+    def read_status(self, drones, ca_bundle=None, numbers=None):
+        self.calls.append(("read_status", [d.ip for d in drones], list(numbers or [])))
+        return [self.infos.get(d.ip, DroneInfo(reachable=False)) for d in drones]
 
     def state(self):
         return RunState(IDLE)
@@ -29,7 +35,7 @@ class RecordingEngine:
         return self.running
 
     def logs(self):
-        return ["12:00:00 drone 1, 192.168.21.11, takeoff, 200 ok"]
+        return ["12:00:00 drone 1, 192.168.4.11, takeoff, 200 ok"]
 
     def clear_log(self):
         self.calls.append(("clear_log",))
@@ -91,17 +97,17 @@ def test_execute_with_invalid_input_is_refused(app):
 
 
 def test_execute_abort_and_land_wiring(app):
-    fill_drone(app, 0, "192.168.21.11", "k" * 40)
+    fill_drone(app, 0, "192.168.4.11", "k" * 40)
     app.run()
     assert not [e for e in app.error if "drone 1" in e.value]
     button(app, "Execute").click().run()
     name, drones, steps, bundle = RecordingEngine.instance.calls[-1]
     assert name == "start" and steps == ["takeoff", "sleep 3", "land"] and bundle is None
-    assert drones[0].ip == "192.168.21.11" and drones[0].port == 8000
+    assert drones[0].ip == "192.168.4.11" and drones[0].port == 8000
 
     button(app, "Abort (hover all)").click().run()
     assert RecordingEngine.instance.calls[-1][0] == "abort"
-    assert RecordingEngine.instance.calls[-1][1][0].ip == "192.168.21.11"
+    assert RecordingEngine.instance.calls[-1][1][0].ip == "192.168.4.11"
     button(app, "Land all").click().run()
     assert RecordingEngine.instance.calls[-1][0] == "land_all"
 
@@ -109,13 +115,13 @@ def test_execute_abort_and_land_wiring(app):
 def test_ip_outside_network_is_rejected(app):
     fill_drone(app, 0, "10.0.0.5", "k" * 40)
     app.run()
-    assert any("must be inside 192.168.21.0/24" in e.value for e in app.error)
+    assert any("must be inside 192.168.4.0/24" in e.value for e in app.error)
 
 
 def test_duplicate_endpoint_is_rejected(app):
     button(app, "Add drone").click().run()
-    fill_drone(app, 0, "192.168.21.11", "k" * 40)
-    fill_drone(app, 1, "192.168.21.11", "j" * 40)
+    fill_drone(app, 0, "192.168.4.11", "k" * 40)
+    fill_drone(app, 1, "192.168.4.11", "j" * 40)
     app.run()
     assert any("same IP and port" in e.value for e in app.error)
 
@@ -150,4 +156,64 @@ def test_controls_disabled_while_running(monkeypatch):
     assert button(at, "Add drone").disabled
     assert not button(at, "Abort (hover all)").disabled and not button(at, "Land all").disabled
     assert at.text_input(key="ip_0").disabled
+    st.cache_resource.clear()
+
+
+def label_text(at, number):
+    return next(m.value for m in at.markdown if m.value.startswith("**drone {}**".format(number)))
+
+
+def test_status_shows_green_flying_and_red_ground_with_battery(app):
+    button(app, "Add drone").click().run()
+    fill_drone(app, 0, "192.168.4.11", "k" * 40)
+    fill_drone(app, 1, "192.168.4.12", "j" * 40)
+    app.run()
+    assert label_text(app, 1) == "**drone 1**"          # nothing shown before Status is pressed
+    RecordingEngine.instance.infos = {"192.168.4.11": DroneInfo(True, True, 87, True),
+                                      "192.168.4.12": DroneInfo(True, False, 42, True)}
+    button(app, "Status").click().run()
+    assert RecordingEngine.instance.calls[-1] == ("read_status", ["192.168.4.11", "192.168.4.12"], [1, 2])
+    assert label_text(app, 1) == "**drone 1** :green[**flying 87%**]"
+    assert label_text(app, 2) == "**drone 2** :red[**on ground 42%**]"
+    assert not [c for c in RecordingEngine.instance.calls if c[0] in ("start", "abort", "land_all")]
+
+
+def test_status_unreachable_unknown_battery_and_stale_ip(app):
+    fill_drone(app, 0, "192.168.4.11", "k" * 40)
+    app.run()
+    button(app, "Status").click().run()
+    assert label_text(app, 1) == "**drone 1** :gray[no answer]"
+    RecordingEngine.instance.infos = {"192.168.4.11": DroneInfo(True, False, None, True)}
+    button(app, "Status").click().run()
+    assert label_text(app, 1) == "**drone 1** :red[**on ground ?%**]"
+    app.text_input(key="ip_0").set_value("192.168.4.99").run()      # IP edited: old result is hidden
+    assert label_text(app, 1) == "**drone 1**"
+
+
+def test_status_only_asks_valid_drones_and_refuses_when_none(app):
+    button(app, "Status").click().run()
+    assert any("No valid drone to ask" in e.value for e in app.error)
+    assert not [c for c in RecordingEngine.instance.calls if c[0] == "read_status"]
+    button(app, "Add drone").click().run()
+    fill_drone(app, 1, "192.168.4.12", "j" * 40)       # drone 1 stays invalid
+    app.run()
+    button(app, "Status").click().run()
+    assert RecordingEngine.instance.calls[-1] == ("read_status", ["192.168.4.12"], [2])
+
+
+def test_status_button_is_available_while_running(monkeypatch):
+    st.cache_resource.clear()
+
+    class Busy(RecordingEngine):
+        def __init__(self):
+            super().__init__()
+            self.running = True
+
+        def state(self):
+            return RunState("running", 1, 3, "takeoff", ("running",))
+
+    monkeypatch.setattr(engine_module, "FleetEngine", Busy)
+    monkeypatch.setattr(engine_module, "configure_console_logging", lambda: None)
+    at = AppTest.from_file(PAGE, default_timeout=30).run()
+    assert not button(at, "Status").disabled
     st.cache_resource.clear()

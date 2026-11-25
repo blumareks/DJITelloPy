@@ -21,6 +21,7 @@ TIMEOUT_ABORT_S = 5
 TIMEOUT_LAND_S = 30      # a land sent to an idle drone is synchronous and takes a few seconds
 TIMEOUT_FLIGHT_S = 60    # takeoff / move / turn block until the movement is done
 TIMEOUT_RECORD_S = 15
+TIMEOUT_STATUS_S = 5     # the status endpoint never talks to the drone, so it answers at once
 
 MAX_TEXT = 200
 
@@ -37,6 +38,26 @@ class CallResult:
     ok: bool
     status: Optional[int]    # HTTP status, None if there was no HTTP answer
     text: str                # short, sanitised summary of the response
+    data: Optional[dict] = None   # parsed JSON body of a successful response
+
+
+@dataclass(frozen=True)
+class DroneInfo:
+    """What `GET /v1/status` told us about one drone (reachable=False if there was no answer)."""
+    reachable: bool
+    flying: bool = False
+    battery: Optional[int] = None
+    connected: bool = False
+
+
+def info_from_result(result: CallResult) -> DroneInfo:
+    data = result.data
+    if not result.ok or not isinstance(data, dict) or not isinstance(data.get("flying"), bool):
+        return DroneInfo(reachable=False)
+    battery = data.get("battery")
+    if not isinstance(battery, int) or isinstance(battery, bool) or not 0 <= battery <= 100:
+        battery = None
+    return DroneInfo(True, data["flying"], battery, data.get("connected") is True)
 
 
 def clean_text(text: str, limit: int = MAX_TEXT) -> str:
@@ -92,6 +113,11 @@ def _describe_response(response: requests.Response) -> str:
     if isinstance(body, dict):
         if "detail" in body:
             return clean_text(body["detail"])
+        if "flying" in body:
+            battery = body.get("battery")
+            return clean_text("{}, battery {}".format(
+                "flying" if body["flying"] is True else "on ground",
+                "{}%".format(battery) if isinstance(battery, int) else "unknown"))
         if "recording" in body:
             text = "recording " + ("on" if body["recording"] else "off")
             if body.get("file"):
@@ -125,7 +151,14 @@ class TelloApiClient:
         except requests.exceptions.RequestException as exc:
             return CallResult(False, None, "request error ({})".format(type(exc).__name__))
         text = "{} {}".format(response.status_code, _describe_response(response))
-        return CallResult(response.ok, response.status_code, text)
+        data = None
+        if response.ok:
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = None
+            data = parsed if isinstance(parsed, dict) else None
+        return CallResult(response.ok, response.status_code, text, data)
 
     def execute(self, step: Step) -> Tuple[str, CallResult]:
         """Send one (non-sleep) step. Returns (command label for the log, result)."""
@@ -142,6 +175,9 @@ class TelloApiClient:
             return step.text, self._call("PUT", "/v1/recording", {"enabled": bool(step.value)},
                                          TIMEOUT_RECORD_S)
         raise ValueError("step '{}' is not sent to drones".format(step.kind))
+
+    def status(self) -> Tuple[str, CallResult]:
+        return "status", self._call("GET", "/v1/status", None, TIMEOUT_STATUS_S)
 
     def abort(self) -> Tuple[str, CallResult]:
         return "abort", self._call("POST", "/v1/abort", None, TIMEOUT_ABORT_S)

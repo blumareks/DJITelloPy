@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from fleet_ui.client import DroneConfig, TelloApiClient, check_ca_bundle, check_drone
+from fleet_ui.client import (CallResult, DroneConfig, DroneInfo, TelloApiClient, check_ca_bundle,
+                             check_drone, info_from_result)
 from fleet_ui.engine import (ABORTED, FINISHED, HALTED, LANDED, FleetEngine)
 from fleet_ui.steps import parse_script
 
@@ -73,7 +74,7 @@ class FakeDrone:
                 self.end_headers()
                 self.wfile.write(data)
 
-            do_POST = do_PUT = _handle
+            do_POST = do_PUT = do_GET = _handle
 
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -306,16 +307,72 @@ def test_no_drones_or_steps_does_not_start():
     assert not engine.start([DroneConfig("127.0.0.1", 1, "k")], [])
 
 
+STATUS_FLYING = {"connected": True, "flying": True, "recording": False, "recording_file": None, "battery": 87}
+STATUS_GROUND = {"connected": True, "flying": False, "recording": False, "recording_file": None, "battery": 42}
+
+
+def test_read_status_returns_flying_and_battery_per_drone(fleet, certs):
+    fleet[0].responses["/v1/status"] = (200, STATUS_FLYING)
+    fleet[1].responses["/v1/status"] = (200, STATUS_GROUND)
+    engine = FleetEngine()
+    infos = engine.read_status(configs(fleet), str(certs[0] / "ca.pem"))
+    assert infos == [DroneInfo(True, True, 87, True), DroneInfo(True, False, 42, True)]
+    for drone, key in zip(fleet, (KEY1, KEY2)):
+        assert [(r[1], r[2], r[3], r[4]) for r in drone.requests] == [("GET", "/v1/status", None, key)]
+    lines = engine.logs()
+    assert any(l.endswith("drone 1, 127.0.0.1, status, 200 flying, battery 87%") for l in lines)
+    assert any(l.endswith("drone 2, 127.0.0.1, status, 200 on ground, battery 42%") for l in lines)
+    assert engine.state().status == "idle"          # reading status is not a run
+
+
+def test_read_status_uses_given_drone_numbers(fleet, certs):
+    engine = FleetEngine()
+    engine.read_status(configs(fleet)[1:], str(certs[0] / "ca.pem"), [2])
+    assert any("drone 2, 127.0.0.1, status" in l for l in engine.logs())
+
+
+def test_read_status_wrong_key_and_unreachable(fleet, certs):
+    bad = [DroneConfig("127.0.0.1", fleet[0].port, "wrong-key-" + "z" * 30)]
+    infos = FleetEngine().read_status(bad, str(certs[0] / "ca.pem"))
+    assert infos == [DroneInfo(reachable=False)]
+    # no CA bundle -> TLS verification fails, reported as unreachable
+    assert FleetEngine().read_status(configs(fleet)[:1]) == [DroneInfo(reachable=False)]
+    assert FleetEngine().read_status([]) == []
+
+
+def test_read_status_works_while_a_run_is_in_progress(fleet, certs):
+    fleet[0].responses["/v1/status"] = (200, STATUS_FLYING)
+    engine = FleetEngine()
+    ca = str(certs[0] / "ca.pem")
+    engine.start(configs(fleet), steps("sleep 30"), ca)
+    assert wait_for(lambda: engine.state().current_step == 1)
+    assert engine.read_status(configs(fleet)[:1], ca)[0].flying is True
+    assert engine.is_running
+    engine.abort()
+    engine.join(10)
+
+
+def test_info_from_result_is_defensive():
+    ok = lambda data: CallResult(True, 200, "x", data)
+    assert info_from_result(ok({"flying": True, "battery": 55, "connected": True})) == DroneInfo(True, True, 55, True)
+    assert info_from_result(ok({"flying": False, "battery": None})).battery is None
+    assert info_from_result(ok({"flying": False, "battery": 101})).battery is None
+    assert info_from_result(ok({"flying": False, "battery": True})).battery is None
+    assert info_from_result(ok({"flying": "yes"})) == DroneInfo(reachable=False)
+    assert info_from_result(ok(None)) == DroneInfo(reachable=False)
+    assert info_from_result(CallResult(False, 401, "401 x", None)) == DroneInfo(reachable=False)
+
+
 def test_check_drone():
-    cfg, errs = check_drone(" 192.168.21.11 ", "8000", "secret")
-    assert errs == [] and cfg.ip == "192.168.21.11" and cfg.port == 8000
+    cfg, errs = check_drone(" 192.168.4.11 ", "8000", "secret")
+    assert errs == [] and cfg.ip == "192.168.4.11" and cfg.port == 8000
     assert "secret" not in repr(cfg)
-    for ip in ("10.0.0.1", "192.168.22.5", "192.168.21.256", "", "abc", "192.168.21.1/24"):
+    for ip in ("10.0.0.1", "192.168.22.5", "192.168.4.256", "", "abc", "192.168.4.1/24"):
         assert check_drone(ip, "8000", "k")[0] is None
     for port in ("", "0", "65536", "x", "-1", "80 80"):
-        assert check_drone("192.168.21.5", port, "k")[0] is None
-    assert check_drone("192.168.21.5", "8000", "")[0] is None
-    assert check_drone("192.168.21.5", "8000", "k\ney")[0] is None
+        assert check_drone("192.168.4.5", port, "k")[0] is None
+    assert check_drone("192.168.4.5", "8000", "")[0] is None
+    assert check_drone("192.168.4.5", "8000", "k\ney")[0] is None
 
 
 def test_check_ca_bundle(tmp_path):

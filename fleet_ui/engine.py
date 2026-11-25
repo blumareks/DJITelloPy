@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Callable, Deque, List, Optional, Sequence, Tuple
 
-from .client import CallResult, DroneConfig, TelloApiClient, clean_text
+from .client import CallResult, DroneConfig, DroneInfo, TelloApiClient, clean_text, info_from_result
 from .steps import Step
 
 logger = logging.getLogger("fleet_ui")
@@ -103,6 +103,25 @@ class FleetEngine:
     def land_all(self, drones: Sequence[DroneConfig] = (), ca_bundle: Optional[str] = None) -> None:
         """Land all drones and stop the run. During a run the run's own drone list is used."""
         self._emergency(LANDED, "land", drones, ca_bundle)
+
+    def read_status(self, drones: Sequence[DroneConfig], ca_bundle: Optional[str] = None,
+                    numbers: Optional[Sequence[int]] = None) -> List[DroneInfo]:
+        """Ask every drone's service for its state (flying, battery). Safe during a run.
+
+        ``numbers`` are the drone numbers shown in the UI/log (default 1..N).
+        """
+        drones = tuple(drones)
+        if not drones:
+            return []
+        numbers = tuple(numbers) if numbers else tuple(range(1, len(drones) + 1))
+        clients = [self._factory(d, ca_bundle) for d in drones]
+
+        def send(i: int) -> DroneInfo:
+            label, result = clients[i].status()
+            self._log_call(numbers[i], drones[i], label, result.text)
+            return info_from_result(result)
+
+        return self._fan_out(len(drones), send)
 
     # ----- internals -----
     def _emit(self, line: str) -> None:

@@ -38,6 +38,7 @@ def _init_state() -> None:
     if "drone_ids" not in st.session_state:
         st.session_state.drone_ids = [0]
         st.session_state.next_drone_id = 1
+        st.session_state.drone_info = {}     # drone_id -> (ip, DroneInfo)
 
 
 def _add_drone() -> None:
@@ -47,8 +48,24 @@ def _add_drone() -> None:
 
 def _remove_drone(drone_id: int) -> None:
     st.session_state.drone_ids.remove(drone_id)
+    st.session_state.drone_info.pop(drone_id, None)
     for prefix in ("ip_", "port_", "key_"):
         st.session_state.pop("{}{}".format(prefix, drone_id), None)
+
+
+def _drone_label(number: int, drone_id: int, ip: str) -> str:
+    """Markdown for 'drone N' plus the last status result (green = flying, red = on the ground)."""
+    label = "**drone {}**".format(number)
+    entry = st.session_state.drone_info.get(drone_id)
+    if entry is None or entry[0] != ip.strip():     # no result yet, or the IP was edited since
+        return label
+    info = entry[1]
+    if not info.reachable:
+        return "{} :gray[no answer]".format(label)
+    battery = "{}%".format(info.battery) if info.battery is not None else "?%"
+    if info.flying:
+        return "{} :green[**flying {}**]".format(label, battery)
+    return "{} :red[**on ground {}**]".format(label, battery)
 
 
 def _cell(value) -> str:
@@ -66,15 +83,16 @@ st.caption("API keys live only in this browser session and are never written to 
 
 # ----- drones -----
 st.subheader("Drones")
-header = st.columns([1, 3, 1.5, 4, 1.5])
+DRONE_COLUMNS = [2.5, 3, 1.5, 4, 1.5]
+header = st.columns(DRONE_COLUMNS)
 for column, text in zip(header, ("", "IP address ({})".format(DEFAULT_NETWORK), "Port", "API key", "")):
     column.caption(text)
 
 drone_inputs = []
 for number, drone_id in enumerate(st.session_state.drone_ids, start=1):
-    c_label, c_ip, c_port, c_key, c_remove = st.columns([1, 3, 1.5, 4, 1.5], vertical_alignment="center")
-    c_label.markdown("**drone {}**".format(number))
-    ip = c_ip.text_input("IP address", key="ip_{}".format(drone_id), placeholder="192.168.21.x",
+    c_label, c_ip, c_port, c_key, c_remove = st.columns(DRONE_COLUMNS, vertical_alignment="center")
+    label_slot = c_label.empty()
+    ip = c_ip.text_input("IP address", key="ip_{}".format(drone_id), placeholder="192.168.4.x",
                          label_visibility="collapsed", disabled=running, max_chars=15)
     port = c_port.text_input("Port", key="port_{}".format(drone_id), value=DEFAULT_PORT,
                              label_visibility="collapsed", disabled=running, max_chars=5)
@@ -83,13 +101,14 @@ for number, drone_id in enumerate(st.session_state.drone_ids, start=1):
                            disabled=running, max_chars=256)
     c_remove.button("Remove", key="remove_{}".format(drone_id), on_click=_remove_drone,
                     args=(drone_id,), disabled=running)
-    drone_inputs.append((number, ip, port, key))
+    label_slot.markdown(_drone_label(number, drone_id, ip))
+    drone_inputs.append((number, drone_id, ip, port, key))
 
 st.button("Add drone", on_click=_add_drone, disabled=running)
 
 configs = []
 drone_errors = []
-for number, ip, port, key in drone_inputs:
+for number, _drone_id, ip, port, key in drone_inputs:
     config, problems = check_drone(ip, port, key)
     if config:
         configs.append(config)
@@ -140,10 +159,11 @@ elif not steps:
     st.warning("The script has no instructions.")
 
 # ----- buttons -----
-b_execute, b_abort, b_land, _spacer = st.columns([1, 1, 1, 5])
+b_execute, b_abort, b_land, b_status, _spacer = st.columns([1, 1, 1, 1, 4])
 execute = b_execute.button("Execute", type="primary", disabled=running, width="stretch")
 abort = b_abort.button("Abort (hover all)", width="stretch")
 land_all = b_land.button("Land all", width="stretch")
+status_clicked = b_status.button("Status", width="stretch")
 
 if execute:
     if drone_errors or ca_error or script_errors or not steps:
@@ -158,6 +178,19 @@ elif abort or land_all:
         (engine.abort if abort else engine.land_all)(configs, bundle)
         if drone_errors:
             st.warning("Some drone rows are invalid and were skipped.")
+elif status_clicked:
+    # Only the status endpoint is called: it reads the service's own view and never moves a drone.
+    valid = [(n, did, ip, port, key) for n, did, ip, port, key in drone_inputs
+             if check_drone(ip, port, key)[0] is not None]
+    if not valid:
+        st.error("No valid drone to ask.")
+    else:
+        valid_configs = [check_drone(ip, port, key)[0] for _n, _d, ip, port, key in valid]
+        bundle = None if ca_error else (ca_bundle.strip() or None)
+        infos = engine.read_status(valid_configs, bundle, [n for n, *_ in valid])
+        for (_n, did, ip, _p, _k), info in zip(valid, infos):
+            st.session_state.drone_info[did] = (ip.strip(), info)
+        st.rerun()   # redraw the rows with the new colours
 
 # ----- live status and log -----
 refresh = 1 if running else None
